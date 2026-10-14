@@ -1,0 +1,56 @@
+// Use this file when Jenkins runs directly on Windows with Docker Desktop (Kubernetes enabled)
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = 'student-task-manager'
+        IMAGE_TAG  = "${BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Validate') {
+            steps {
+                bat 'for %%f in (index.html style.css script.js Dockerfile nginx.conf k8s\\deployment.yaml k8s\\service.yaml) do (if not exist %%f (echo Missing %%f & exit /b 1))'
+                bat 'echo All required files are present.'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                bat 'docker build -t %IMAGE_NAME%:%IMAGE_TAG% -t %IMAGE_NAME%:latest .'
+            }
+        }
+
+        stage('Test Container') {
+            steps {
+                bat 'docker rm -f stm-test & exit /b 0'
+                bat 'docker run -d --name stm-test -p 8089:80 %IMAGE_NAME%:%IMAGE_TAG%'
+                bat 'ping -n 6 127.0.0.1 >nul'
+                bat 'curl -f http://localhost:8089/health'
+                bat 'curl -f http://localhost:8089/ | findstr /C:"Student Task Manager"'
+                bat 'docker rm -f stm-test'
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                bat 'kubectl config use-context docker-desktop'
+                bat 'kubectl apply -f k8s/'
+                bat 'kubectl set image deployment/student-task-manager app=%IMAGE_NAME%:%IMAGE_TAG%'
+                bat 'kubectl rollout status deployment/student-task-manager --timeout=90s'
+                bat 'kubectl get pods,svc'
+            }
+        }
+    }
+
+    post {
+        success { echo 'Pipeline completed successfully.' }
+        failure { bat 'docker rm -f stm-test & exit /b 0' }
+    }
+}
